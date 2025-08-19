@@ -1,5 +1,6 @@
 // Add this to controllers/spareInventory.js
 import * as inventory from '../models/SpareInventory.js';
+import * as User from '../models/User.js';
 
 export const handleTransactionController = async (req, res) => {
   const {
@@ -10,7 +11,6 @@ export const handleTransactionController = async (req, res) => {
     transaction_type,
     quantity,
     uom,
-    employeename,
      notes
   } = req.body;
 
@@ -27,6 +27,7 @@ export const handleTransactionController = async (req, res) => {
   
 
     // Call the model function to handle the transaction
+     const user = await User.findUserWithDetailsById(req.user.id);
     const result = await inventory.handleStockTransaction({
       name,
       category,
@@ -35,7 +36,7 @@ export const handleTransactionController = async (req, res) => {
       transaction_type,
       quantity,
       uom,
-      employeename,
+      employeename:user.name,
        notes
     });
 
