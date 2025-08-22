@@ -17,13 +17,12 @@ export async function findAllUsersWithDetails() {
       u.name AS user_name,
       u.email,
       u.contact,
-      u.profile_image,
       u.is_active,
        u.designation,
       u.created_at AS user_created_at,
      
     
-      r.role AS role,
+      r.name AS role,
 
       -- Address
       json_build_object(
@@ -69,18 +68,17 @@ export async function findUserWithDetailsById(id) {
   const [user] = await sql`
     SELECT 
       u.id ,
-      u.name ,
+      u.name as user_name ,
       u.email,
       u.contact,
-      u.profile_image,
       u.is_active,
       u.designation,
       u.created_at,
-       r.role,
+      u.has_admin_access,
+      r.name as role,
       
       -- User Address
       json_build_object(
-        'id', a.id,
         'street', a.street,
         'city', a.city,
         'state', a.state,
@@ -88,14 +86,12 @@ export async function findUserWithDetailsById(id) {
         'country', a.country_code
       ) AS address,
 
-      -- Plant (lookup using details.plant_id)
       CASE 
         WHEN (u.details->>'plant_id') IS NOT NULL THEN
           json_build_object(
             'id', p.id,
             'name', p.name,
             'address', json_build_object(
-              'id', pa.id,
               'street', pa.street,
               'city', pa.city,
               'state', pa.state,
@@ -130,35 +126,19 @@ export async function updateUserStatus(userId, isActive) {
 // Create a new user record in the database.
 export async function createUser(userData) {
   const {
-    name, email, password, contact, details, address_id,profile_image,
-    is_active, role_id,designation
+    name, email, password, contact, details, address_id,
+    is_active, role_id,designation,has_admin_access
   } = userData;
 
 
   const [result] = await sql`
     INSERT INTO users (
-      name, email, password, contact,  address_id,profile_image,details, is_active ,role_id ,designation
+      name, email, password, contact,  address_id,details, is_active ,role_id ,designation,has_admin_access
     ) VALUES (
-      ${name}, ${email}, ${password}, ${contact},  ${address_id},${profile_image},${details},${is_active} ,${role_id},${designation}
-    ) RETURNING id, name, email, contact,  address_id,profile_image,details, is_active ,designation
+      ${name}, ${email}, ${password}, ${contact},  ${address_id},${details},${is_active} ,${role_id},${designation},${has_admin_access}
+    ) RETURNING id, name, email, contact,  address_id,details, is_active ,designation,has_admin_access
   `;
   return result;
 }
 
 
-//Store a refresh token for a user.
-
-export async function updateUserRefreshToken(userId, refreshToken) {
-  await sql`
-    UPDATE users SET refresh_token = ${refreshToken} WHERE id = ${userId}
-  `;
-}
-
-// Find a user by their refresh token.
-
-export async function findUserByRefreshToken(refreshToken) {
-  const [result] = await sql`
-    SELECT * FROM users WHERE refresh_token = ${refreshToken}
-  `;
-  return result;
-}

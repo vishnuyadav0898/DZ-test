@@ -8,8 +8,9 @@ if (!connectionString) {
   throw new Error("DATABASE_URL environment variable is not set");
 }
 
-const sql = postgres(connectionString);
-
+const sql = postgres(connectionString, {
+  ssl: 'require', 
+});
 console.log('✅ PostgreSQL connection pool established');
 
 export default sql;

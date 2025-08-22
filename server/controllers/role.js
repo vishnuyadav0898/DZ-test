@@ -23,7 +23,7 @@ export const createRoleController = async (req, res) => {
 export const getAllRolesController = async (req, res) => {
   try {
     const roles = await getRoles();
-    res.status(200).json({ data: roles });
+   res.status(200).json({ data: roles });
   } catch (err) {
     res.status(500).json({ message: "Error fetching roles", error: err.message });
   }

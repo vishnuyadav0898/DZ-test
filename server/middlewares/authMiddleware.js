@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import 'dotenv/config'; 
 
+
 export const authMiddleware = (req, res, next) => {
   const authHeader = req.header('Authorization');
   
@@ -18,5 +19,19 @@ export const authMiddleware = (req, res, next) => {
     res.status(401).json({ message: 'Invalid token' });
   }
 };
+export const is_admin = (req,res,next)=>{
+  if (req.user.has_admin_access) {
+      return res.status(403).json({ message: "Only admins can create users" });
+    }
+    next();
+}
 
+export const authorizeRoles = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: "Forbidden: Not authorized" });
+    }
+    next();
+  };
+};
 export default authMiddleware; 

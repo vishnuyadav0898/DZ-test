@@ -5,7 +5,6 @@ export async function handleStockTransaction({
   category,
   machinename,
   plantname,
-
   transaction_type,
   quantity,
   uom,

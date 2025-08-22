@@ -3,7 +3,7 @@ import sql from "../db.js";
 // Function to create a new role
 export async function createRole(roleName) {
   const result = await sql`
-    INSERT INTO roles (role)
+    INSERT INTO roles (name)
     VALUES (${roleName})
     RETURNING *
   `;

@@ -6,7 +6,6 @@ import * as Otp from "../models/OtpEntry.js";
 import * as User from "../models/User.js";
 import { findOrCreateAddress } from "../models/Address.js";
 import { getRoleById } from "../models/Role.js";
-
 // Controller to send OTP to a contact number for registration
 
 export const sendOtpController = async (req, res) => {
@@ -19,11 +18,9 @@ export const sendOtpController = async (req, res) => {
     // Check if contact is already linked to an existing user
     const existingUser = await User.findUserByContactOrEmail(contact);
     if (existingUser) {
-      return res
-        .status(409)
-        .json({
-          message: "This contact is already registered. Please try logging in.",
-        });
+      return res.status(409).json({
+        message: "This contact is already registered. Please try logging in.",
+      });
     }
 
     // Generate OTP (4 digits) and set expiry time (10 min)
@@ -65,12 +62,10 @@ export const verifyOtpController = async (req, res) => {
 
     // Mark OTP as verified
     await Otp.verifyOtp(contact);
-    res
-      .status(200)
-      .json({
-        message: "OTP verified successfully.",
-        contact: tempEntry.contact,
-      });
+    res.status(200).json({
+      message: "OTP verified successfully.",
+      contact: tempEntry.contact,
+    });
   } catch (err) {
     console.error("OTP Verify Error:", err);
     res.status(500).json({ message: "Server error during OTP verification." });
@@ -87,10 +82,8 @@ export const registerController = async (req, res) => {
     contact,
     address,
     details,
-    profile_image,
-   role_id,
-   designation,
-
+    role_id,
+    designation,
   } = req.body;
 
   // Validate required fields
@@ -101,7 +94,6 @@ export const registerController = async (req, res) => {
     !contact ||
     !address ||
     !details ||
-    !profile_image||
     !role_id
   ) {
     return res
@@ -141,7 +133,6 @@ export const registerController = async (req, res) => {
     } else {
       userStatus = true;
     }
-  
 
     // Save address in DB
     const savedAddress = await findOrCreateAddress(address);
@@ -156,45 +147,28 @@ export const registerController = async (req, res) => {
       password: hashedPassword,
       contact,
       address_id: savedAddress.id,
-      profile_image,
       is_active: userStatus,
       role_id,
       details,
       designation,
+      has_admin_access: false,
     });
-   
-    
+
     // Cleanup OTP entry
     await Otp.deleteOtp(contact);
 
     // --- 2. Only log in the user if their status is "Active" ---
     if (userStatus) {
       // User is active, generate tokens and log them in
-      const accessToken = jwt.sign({ id: newUser.id }, process.env.JWT_SECRET, {
-        expiresIn: "35m",
-      });
-      const refreshToken = jwt.sign(
-        { id: newUser.id },
-        process.env.JWT_SECRET,
-        { expiresIn: "7d" }
-      );
-
-      await User.updateUserRefreshToken(newUser.id, refreshToken);
-
-      res.cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "Lax",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
+      const Token = jwt.sign({ id: newUser.id }, process.env.JWT_SECRET, {
+        expiresIn: "7d",
       });
 
-      return res
-        .status(201)
-        .json({
-          message: "User registered successfully!",
-          accessToken,
-          newUser,
-        });
+      return res.status(201).json({
+        message: "User registered successfully!",
+        Token,
+        newUser,
+      });
     } else {
       // User is "Pending", send appropriate message and DO NOT send tokens
       return res.status(201).json({
@@ -205,12 +179,64 @@ export const registerController = async (req, res) => {
     }
   } catch (err) {
     console.error("Registration error:", err);
-    return res
-      .status(500)
-      .json({
-        message: "Server error during registration.",
-        error: err.message,
-      });
+    return res.status(500).json({
+      message: "Server error during registration.",
+      error: err.message,
+    });
+  }
+};
+export const registerbyadmin = async (req, res) => {
+  const {
+    name,
+    email,
+    password,
+    contact,
+    address,
+    details,
+    role_id,
+    designation,
+  } = req.body;
+
+  try {
+    const existingUser = await User.findUserByContactOrEmail(contact || email);
+    if (existingUser) {
+      return res
+        .status(400)
+        .json({ message: "User with this contact or email already exists" });
+    }
+    const savedAddress = await findOrCreateAddress(address);
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = await User.createUser({
+      name,
+      email,
+      password: hashedPassword,
+      contact,
+      address_id: savedAddress.id,
+      is_active: true,
+      role_id,
+      details,
+      designation,
+      has_admin_access: false,
+    });
+    const Token = jwt.sign({ id: newUser.id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    res.status(201).json({
+      message: "User created by admin successfully",
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        contact: user.contact,
+        has_admin_access: user.has_admin_access,
+      },
+      Token,
+    });
+  } catch (err) {
+    console.error("Admin register error:", err);
+    res.status(500).json({ message: "Server error during admin registration" });
   }
 };
 
@@ -229,43 +255,46 @@ export const loginController = async (req, res) => {
     // Find user by email or contact
     const user = await User.findUserByContactOrEmail(identifier);
 
-    // Check if user exists and password is correct
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    if (!user) {
       return res.status(401).json({ message: "Invalid credentials." });
     }
+
+    // Check password
+    if (!(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ message: "Invalid credentials." });
+    }
+
     if (!user.is_active) {
+      return res.status(403).json({
+        message:
+          "Your account is pending approval. Please wait for an administrator to activate it.",
+      });
+    }
+
+    // Get role info
+    const roleDoc = await getRoleById(user.role_id);
+    if (!roleDoc) {
       return res
-        .status(403)
-        .json({
-          message:
-            "Your account is pending approval. Please wait for an administrator to activate it.",
-        });
+        .status(404)
+        .json({ message: `Role with ID '${user.role_id}' not found.` });
     }
 
     // Generate tokens
-    const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+    const Token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "35m",
-    });
-    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
-
-    // Save refresh token in DB
-    await User.updateUserRefreshToken(user.id, refreshToken);
-
-    // Send refresh token cookie
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "Lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
     // Fetch and send full user details
     const userDetails = await User.findUserWithDetailsById(user.id);
-    res
-      .status(200)
-      .json({ message: "Logged in successfully", accessToken, userDetails });
+
+    res.status(200).json({
+      message: "Logged in successfully",
+      Token,
+      user: {
+        ...userDetails,
+        role: roleDoc.name, // attach role info here
+      },
+    });
   } catch (err) {
     console.error("Login error:", err);
     res.status(500).json({ message: "Server error during login." });
@@ -274,56 +303,5 @@ export const loginController = async (req, res) => {
 
 // Controller to log out a user
 export const logoutController = async (req, res) => {
-  const { refreshToken } = req.cookies;
-  if (!refreshToken) return res.sendStatus(204); // No content if no token exists
-
-  try {
-    // Find and clear refresh token from DB
-    const user = await User.findUserByRefreshToken(refreshToken);
-    if (user) {
-      await User.updateUserRefreshToken(user.id, null);
-    }
-
-    // Remove cookie
-    res.clearCookie("refreshToken", {
-      httpOnly: true,
-      sameSite: "Lax",
-      secure: process.env.NODE_ENV === "production",
-    });
-    res.status(200).json({ message: "Logged out successfully" });
-  } catch (err) {
-    res.status(500).json({ message: "Server error during logout." });
-  }
-};
-
-//Controller to refresh an access token using a valid refresh token
-
-export const refreshTokenController = async (req, res) => {
-  const { refreshToken } = req.cookies;
-  if (!refreshToken) {
-    return res.status(401).json({ message: "No refresh token provided." });
-  }
-
-  try {
-    // Decode and verify refresh token
-    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
-
-    // Ensure refresh token matches one in DB
-    const user = await User.findUserByRefreshToken(refreshToken);
-    if (!user || user.id !== decoded.id) {
-      return res.status(403).json({ message: "Invalid refresh token." });
-    }
-
-    // Generate new access token
-    const newAccessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "35m",
-    });
-    res
-      .status(200)
-      .json({ accessToken: newAccessToken, message: "Access token refreshed" });
-  } catch (err) {
-    return res
-      .status(403)
-      .json({ message: "Invalid or expired refresh token." });
-  }
+  res.status(200).json({ message: "Logged out successfully" });
 };
