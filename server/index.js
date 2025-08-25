@@ -1,56 +1,48 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
-import bodyParser from 'body-parser';
 import cors from 'cors';
-import 'dotenv/config'; // Replaces require('dotenv').config()
+import 'dotenv/config';
 
-import authRoutes from './routes/auth.js'; 
-import userRoute from './routes/user.js';
+// Import refactored route files
+import authRoutes from './routes/auth.js';
+import userRoutes from './routes/user.js';
 import roleRoutes from "./routes/roles.js";
 import plantRoutes from "./routes/plants.js";
-import InventoryRoutes from "./routes/spareInventory.js";
+import inventoryRoutes from "./routes/spareInventory.js";
 import permissionRoutes from "./routes/rolePermissionRoutes.js";
-import { initPermissionTables } from "./models/Permission.js";
+
+// --- App Initialization ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+
+// --- Core Middlewares ---
+app.use(cors("*"));
+app.use(express.json()); // Replaces bodyParser.json()
 app.use(cookieParser());
-app.use('/uploads', express.static('uploads'));
 
-const allowedOrigins = ['http://0.0.0.0:5173', 'http://192.168.1.21:3000'];
 
-// app.use(cors({
-//   origin: function (origin, callback) {
-//     if (!origin || allowedOrigins.includes(origin)) {
-//       return callback(null, true);
-//     }
-//     return callback(new Error("Not allowed by CORS"));
-//   },
-//   credentials: true,
-// }));
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/roles', roleRoutes);
+app.use('/api/plants', plantRoutes);
+app.use('/api/inventory', inventoryRoutes);
+app.use('/api/permissions', permissionRoutes);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      callback(null, origin || "*"); // allow any origin
-    },
-    credentials: true,
-  })
-);
 
-app.use(bodyParser.json());
-await initPermissionTables();
-// Your routes (preserved the commented-out lines)
-app.use('/api', authRoutes); 
-app.use('/api', userRoute); 
-app.use("/api", roleRoutes);
-app.use("/api", plantRoutes);
-app.use("/api", InventoryRoutes);
-app.use("/api", permissionRoutes);
 
+// --- Root Route for Basic Check ---
 app.get('/', (req, res) => {
   res.send('✅ Server is working!');
 });
 
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+// --- Centralized Error Handling (Optional but Recommended) ---
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).send('Something broke!');
+});
+
+// --- Server Startup ---
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+});

@@ -1,150 +1,159 @@
-import * as Plant from '../models/Plant.js';
-import { findOrCreateAddress } from '../models/Address.js';
+import sequelize from "../sequelize.js"; // Make sure to import your sequelize instance
+import Plant from "../models/Plant.js";
+import Address from "../models/Address.js";
+import User from "../models/User.js";
 
-
- // Controller: Create a new plant
- 
+// -------------------- Create Plant --------------------
 export const createPlantController = async (req, res) => {
   const { name, address, status } = req.body;
 
-  // Basic validation for mandatory fields
   if (!name || !address) {
-    return res.status(400).json({ message: "Plant name and address are required" });
+    return res.status(400).json({ message: "Plant name and address are required." });
+  }
+
+  // Validate address fields
+  const { city, state, pincode, country_code } = address;
+  if (!city || !state || !pincode || !country_code) {
+    return res.status(400).json({ message: "Incomplete address details." });
   }
 
   try {
-    // Validate required address fields
-    if (!address.city || !address.state || !address.pincode || !address.country_code) {
-      return res.status(400).json({
-        message: "Incomplete address details."
+    const result = await sequelize.transaction(async (t) => {
+      // 1. Find or create the address using Sequelize's built-in method
+      const [savedAddress] = await Address.findOrCreate({
+        where: address,
+        defaults: address,
+        transaction: t,
       });
-    }
 
-    // Save or retrieve the address from DB
-    const savedAddress = await findOrCreateAddress(address);
-    if (!savedAddress?.id) {
-      throw new Error("Address insert failed — no ID returned");
-    }
+      // 2. Create the plant
+      const newPlant = await Plant.create({
+        name,
+        status: Boolean(status),
+        address_id: savedAddress.id,
+      }, { transaction: t });
 
-    // Create plant record
-    const newPlant = await Plant.createPlant({
-      name,
-      status: Boolean(status),
-      address_id: savedAddress.id
+      return newPlant;
     });
 
-    res.status(201).json({ message: "Plant created successfully", data: newPlant });
+    return res.status(201).json({ message: "Plant created successfully", data: result });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Error creating plant", error: err.message });
+    console.error("Create Plant Error:", err);
+    return res.status(500).json({ message: "Error creating plant", error: err.message });
   }
 };
 
-/**
- * Controller: Link a plant to a user
- * Checks if plant exists, then assigns it to the logged-in user.
- */
+// -------------------- Link Plant to User --------------------
 export const linkPlantToUserController = async (req, res) => {
   const { plantId } = req.body;
-  const userId = req.user.id; // Extracted from JWT middleware
+  const userId = req.user?.id;
 
-  // Validate input
-  if (!plantId) {
-    return res.status(400).json({ message: "Plant ID is required." });
+  if (!plantId || !userId) {
+    return res.status(400).json({ message: "User ID and Plant ID are required." });
   }
 
   try {
-    // Ensure plant exists
-    const plantExists = await Plant.getPlantById(plantId);
-    if (!plantExists) {
-      return res.status(404).json({ message: "Plant not found." });
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
     }
 
-    // Link plant to user
-    const updatedUser = await Plant.linkPlantToUser(userId, plantId);
-    if (!updatedUser) {
-        return res.status(404).json({ message: "User not found." });
+    const plant = await Plant.findByPk(plantId);
+    if (!plant) {
+        return res.status(404).json({ message: "Plant not found." });
     }
-    
-    res.status(200).json({ message: "Plant linked to user successfully.", user: updatedUser });
+
+    // Use Sequelize mixin to associate the plant (assuming user.addPlant exists)
+    await user.addPlant(plant);
+
+    return res.status(200).json({ message: "Plant linked successfully." });
   } catch (err) {
     console.error("Link Plant Error:", err);
-    res.status(500).json({ message: "Server error while assigning plant." });
+    return res.status(500).json({ message: "Server error while linking plant.", error: err.message });
   }
 };
 
-/**
- * Controller: Get all plants
- * Retrieves a list of all plants from the database.
- */
+// -------------------- Get All Plants --------------------
 export const getAllPlantsController = async (req, res) => {
   try {
-    const plants = await Plant.getAllPlants();
-    res.status(200).json({ data: plants });
+    const plants = await Plant.findAll({
+      include: [{
+        model: Address,
+        as: 'address'
+      }]
+    });
+    
+    return res.status(200).json({ data: plants });
   } catch (err) {
-    res.status(500).json({ message: "Error fetching plants", error: err.message });
+    console.error("Fetch Plants Error:", err); 
+    return res.status(500).json({ message: "Error fetching plants", error: err.message });
   }
 };
 
-//  Controller: Get a single plant by ID 
+
+// -------------------- Get Plant by ID --------------------
 export const getPlantByIdController = async (req, res) => {
   try {
-    const plant = await Plant.getPlantById(req.params.id);
+    const plant = await Plant.findByPk(req.params.id, { include: [Address] });
     if (!plant) {
       return res.status(404).json({ message: "Plant not found" });
     }
-    res.status(200).json({ data: plant });
+    return res.status(200).json({ data: plant });
   } catch (err) {
-    res.status(500).json({ message: "Error fetching plant", error: err.message });
+    return res.status(500).json({ message: "Error fetching plant", error: err.message });
   }
 };
 
-// Controller: Update plant details
- 
+// -------------------- Update Plant --------------------
 export const updatePlantController = async (req, res) => {
   const { id } = req.params;
   const { name, status, address } = req.body;
 
   try {
-    const updateData = {};
-    if (name !== undefined) updateData.name = name;
-    if (status !== undefined) updateData.status = status;
-
-    // If address provided, save or find it
-    if (address) {
-      const savedAddress = await findOrCreateAddress(address);
-      updateData.address_id = savedAddress.id;
-    }
-    
-    // Ensure there is something to update
-    if (Object.keys(updateData).length === 0) {
-        return res.status(400).json({ message: "No update data provided." });
-    }
-
-    // Update plant record
-    const updatedPlant = await Plant.updatePlant(id, updateData);
-    if (!updatedPlant) {
+    const plant = await Plant.findByPk(id);
+    if (!plant) {
       return res.status(404).json({ message: "Plant not found" });
     }
+    
+    if (name !== undefined) plant.name = name;
+    if (status !== undefined) plant.status = Boolean(status);
 
-    // Fetch and return updated record
-    const finalPlantData = await Plant.getPlantById(id);
-    res.status(200).json({ message: "Plant updated successfully", data: finalPlantData });
+    if (address) {
+      const [savedAddress] = await Address.findOrCreate({
+        where: address,
+        defaults: address,
+      });
+      
+      plant.address_id = savedAddress.id;
+    }
+
+    await plant.save();
+    
+    const updatedPlantData = await Plant.findByPk(id, {
+      include: [{
+        model: Address,
+        as: 'address' 
+      }]
+    });
+    
+    return res.status(200).json({ message: "Plant updated successfully", data: updatedPlantData });
   } catch (err) {
-    res.status(500).json({ message: "Error updating plant", error: err.message });
+    console.error(err)
+    return res.status(500).json({ message: "Error updating plant", error: err.message });
   }
 };
 
-// Controller: Delete a plant by ID
-
+// -------------------- Delete Plant --------------------
 export const deletePlantController = async (req, res) => {
   try {
-    const deletedPlant = await Plant.deletePlant(req.params.id);
-    if (!deletedPlant) {
+    const deleted = await Plant.destroy({
+      where: { id: req.params.id },
+    });
+    if (!deleted) {
       return res.status(404).json({ message: "Plant not found" });
     }
-    res.status(200).json({ message: "Plant deleted successfully" });
+    return res.status(200).json({ message: "Plant deleted successfully" });
   } catch (err) {
-    res.status(500).json({ message: "Error deleting plant", error: err.message });
+    return res.status(500).json({ message: "Error deleting plant", error: err.message });
   }
 };

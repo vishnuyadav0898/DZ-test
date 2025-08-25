@@ -1,13 +1,23 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import "dotenv/config";
+import { Op } from "sequelize";
 
-import * as Otp from "../models/OtpEntry.js";
-import * as User from "../models/User.js";
-import { findOrCreateAddress } from "../models/Address.js";
-import { getRoleById } from "../models/Role.js";
-// Controller to send OTP to a contact number for registration
+import OtpEntry from "../models/OtpEntry.js";
+import User from "../models/User.js";
+import Address from "../models/Address.js";
+import Role from "../models/Role.js";
+import Plant from "../models/Plant.js";
+import sequelize from "../sequelize.js"; // Import the sequelize instance
 
+// --- Helper Function to Generate JWT ---
+const generateToken = (userId) => {
+  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+    expiresIn: "7d",
+  });
+};
+
+// -------------------- Send OTP Controller --------------------
 export const sendOtpController = async (req, res) => {
   const { contact } = req.body;
   if (!contact) {
@@ -15,31 +25,29 @@ export const sendOtpController = async (req, res) => {
   }
 
   try {
-    // Check if contact is already linked to an existing user
-    const existingUser = await User.findUserByContactOrEmail(contact);
+    const existingUser = await User.findOne({ where: { contact } });
     if (existingUser) {
-      return res.status(409).json({
-        message: "This contact is already registered. Please try logging in.",
-      });
+      return res.status(409).json({ message: "This contact is already registered. Please login." });
     }
 
-    // Generate OTP (4 digits) and set expiry time (10 min)
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    // Create or update OTP entry in DB
-    await Otp.findOrCreateOtp(contact, otp, otpExpires);
+    await OtpEntry.upsert({
+      contact,
+      otp,
+      otp_expires_at: otpExpires,
+    });
 
-    // Send OTP back in response (for demo/testing — in production send via SMS)
-    res.status(201).json({ message: `OTP sent to ${contact} is ${otp}.` });
+   
+    res.status(201).json({ message: `OTP sent to ${contact}.`, otp });
   } catch (err) {
     console.error("OTP Send Error:", err);
     res.status(500).json({ message: "Server error while sending OTP." });
   }
 };
 
-// Controller to verify OTP for a given contact
-
+// -------------------- Verify OTP Controller --------------------
 export const verifyOtpController = async (req, res) => {
   const { contact } = req.params;
   const { otp } = req.body;
@@ -47,261 +55,217 @@ export const verifyOtpController = async (req, res) => {
   if (!otp) return res.status(400).json({ message: "OTP is required." });
 
   try {
-    // Get OTP record from DB
-    const tempEntry = await Otp.findOtpByContact(contact);
-    if (!tempEntry)
+    const tempEntry = await OtpEntry.findOne({ where: { contact } });
+    if (!tempEntry) {
       return res.status(404).json({ message: "Please request an OTP first." });
+    }
 
-    // Validate OTP and expiry
-    if (
-      tempEntry.otp !== otp ||
-      new Date(tempEntry.otp_expires_at) < new Date()
-    ) {
+    if (tempEntry.otp !== otp || new Date(tempEntry.otp_expires_at) < new Date()) {
       return res.status(400).json({ message: "Invalid or expired OTP." });
     }
 
-    // Mark OTP as verified
-    await Otp.verifyOtp(contact);
-    res.status(200).json({
-      message: "OTP verified successfully.",
-      contact: tempEntry.contact,
-    });
+    await tempEntry.update({ is_verified: true });
+    res.status(200).json({ message: "OTP verified successfully.", contact });
   } catch (err) {
     console.error("OTP Verify Error:", err);
     res.status(500).json({ message: "Server error during OTP verification." });
   }
 };
 
-// Controller to register a new user
-
 export const registerController = async (req, res) => {
-  const {
-    name,
-    email,
-    password,
-    contact,
-    address,
-    details,
-    role_id,
-    designation,
-  } = req.body;
+  const { name, email, password, contact, address, details, role_id, designation } = req.body;
 
-  // Validate required fields
-  if (
-    !name ||
-    !email ||
-    !password ||
-    !contact ||
-    !address ||
-    !details ||
-    !role_id
-  ) {
-    return res
-      .status(400)
-      .json({ message: "Missing one or more required fields." });
+  if (!name || !email || !password || !contact || !address || !role_id) {
+    return res.status(400).json({ message: "Missing one or more required fields." });
   }
 
   try {
-    // Check if contact is OTP-verified
-    const tempEntry = await Otp.findOtpByContact(contact);
-    if (!tempEntry || !tempEntry.is_verified) {
-      return res
-        .status(403)
-        .json({ message: "Contact number must be verified first." });
-    }
+    const result = await sequelize.transaction(async (t) => {
+      // 1. Check for existing user, create address, etc.
+      const existingUser = await User.findOne({
+        where: { [Op.or]: [{ email }, { contact }] },
+        transaction: t,
+      });
 
-    // Ensure email is unique
-    const existingUser = await User.findUserByContactOrEmail(email);
-    if (existingUser) {
-      return res
-        .status(409)
-        .json({ message: "A user with this email already exists." });
-    }
+      if (existingUser) {
+        throw { status: 409, message: "A user with this email or contact already exists." };
+      }
+      
+      const roleDoc = await Role.findByPk(role_id, { transaction: t });
+      if (!roleDoc) throw { status: 404, message: `Role with ID '${role_id}' not found.` };
+      
+      const savedAddress = await Address.create(address, { transaction: t });
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const is_active = !["Client", "RBSPL Employee"].includes(roleDoc.name);
+      
+      // 2. Create User
+      const newUser = await User.create({
+        name, email, password: hashedPassword, contact,
+        address_id: savedAddress.id,
+        role_id: roleDoc.id,
+        plant_id: details?.plant_id || null,
+        is_active, details, designation,
+      }, { transaction: t });
 
-    // Validate role existence
-    const roleDoc = await getRoleById(role_id);
-    if (!roleDoc) {
-      return res
-        .status(404)
-        .json({ message: `Role with ID '${role_id}' not found.` });
-    }
+      // 3. Fetch the complete user object with NESTED associations
+      const userWithDetails = await User.findByPk(newUser.id, {
+        include: [
+          { model: Role, as: 'role' },
+          { model: Address, as: 'address' },
+          {
+            model: Plant,
+            as: 'plant',
+           
+            include: [{
+              model: Address,
+              as: 'address' // Assumes Plant.belongsTo(Address, { as: 'address' })
+            }]
+          }
+        ],
+        transaction: t
+      });
 
-    // --- 1. Determine the user's active status based on role ---
-    let userStatus;
-    if (roleDoc.role === "Client" || roleDoc.role === "RBSPL Employee") {
-      userStatus = false;
-    } else {
-      userStatus = true;
-    }
+      // 4. Manually construct the final user object for the response
+      const { 
+        password: discardedPassword, 
+        address_id: discardedAddressId, 
+        role_id: discardedRoleId, 
+        plant_id: discardedPlantId, // Also discard the plant_id foreign key
+        ...userFields 
+      } = userWithDetails.get({ plain: true });
 
-    // Save address in DB
-    const savedAddress = await findOrCreateAddress(address);
+      let plantResponse = null;
+      if (userWithDetails.plant) {
+        const { id: plantId, address_id: plantAddressId, ...plantFields } = userWithDetails.plant;
+        const { id: addressId, ...addressFields } = userWithDetails.plant.address || {};
+        plantResponse = {
+          ...plantFields,
+          address: userWithDetails.plant.address ? addressFields : null
+        };
+      }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+      const finalUserResponse = {
+        ...userFields,
+        role: userWithDetails.role ? userWithDetails.role.name : null,
+        address: userWithDetails.address ? {
+            street: userWithDetails.address.street,
+            city: userWithDetails.address.city,
+            state: userWithDetails.address.state,
+            country_code: userWithDetails.address.country_code,
+            pincode: userWithDetails.address.pincode,
+        } : null,
+        plant: plantResponse,
+      };
 
-    // Create new user in DB with the CORRECT `status` field
-    const newUser = await User.createUser({
-      name,
-      email,
-      password: hashedPassword,
-      contact,
-      address_id: savedAddress.id,
-      is_active: userStatus,
-      role_id,
-      details,
-      designation,
-      has_admin_access: false,
+      // 5. Generate Token and prepare response
+      const token = is_active ? generateToken(newUser.id) : null;
+      const message = is_active
+        ? "User registered successfully!"
+        : "Registration successful! Your account is pending administrator approval.";
+
+      return { status: 201, body: { message, token, user: finalUserResponse } };
     });
 
-    // Cleanup OTP entry
-    await Otp.deleteOtp(contact);
-
-    // --- 2. Only log in the user if their status is "Active" ---
-    if (userStatus) {
-      // User is active, generate tokens and log them in
-      const Token = jwt.sign({ id: newUser.id }, process.env.JWT_SECRET, {
-        expiresIn: "7d",
-      });
-
-      return res.status(201).json({
-        message: "User registered successfully!",
-        Token,
-        newUser,
-      });
-    } else {
-      // User is "Pending", send appropriate message and DO NOT send tokens
-      return res.status(201).json({
-        message:
-          "Registration successful! Your account is pending approval from an administrator.",
-        user: newUser,
-      });
-    }
+    res.status(result.status).json(result.body);
   } catch (err) {
-    console.error("Registration error:", err);
-    return res.status(500).json({
-      message: "Server error during registration.",
-      error: err.message,
-    });
+    console.error("Registration Error:", err);
+    res.status(err.status || 500).json({ message: err.message || "Server error during registration." });
   }
 };
-export const registerbyadmin = async (req, res) => {
-  const {
-    name,
-    email,
-    password,
-    contact,
-    address,
-    details,
-    role_id,
-    designation,
-  } = req.body;
+
+
+// -------------------- Admin Registration Controller --------------------
+export const registerByAdminController = async (req, res) => {
+  const { name, email, password, contact, address, details, role_id, designation } = req.body;
+
+  if (!name || !email || !password || !contact || !address || !role_id) {
+    return res.status(400).json({ message: "Missing one or more required fields." });
+  }
 
   try {
-    const existingUser = await User.findUserByContactOrEmail(contact || email);
-    if (existingUser) {
-      return res
-        .status(400)
-        .json({ message: "User with this contact or email already exists" });
-    }
-    const savedAddress = await findOrCreateAddress(address);
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = await sequelize.transaction(async (t) => {
+      // 1. Check for existing user by email or contact
+      const existingUser = await User.findOne({
+        where: { [Op.or]: [{ email }, { contact }] },
+        transaction: t
+      });
+      if (existingUser) {
+        throw { status: 409, message: "A user with this email or contact already exists." };
+      }
 
-    const user = await User.createUser({
-      name,
-      email,
-      password: hashedPassword,
-      contact,
-      address_id: savedAddress.id,
-      is_active: true,
-      role_id,
-      details,
-      designation,
-      has_admin_access: false,
-    });
-    const Token = jwt.sign({ id: newUser.id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
+      // 2. Find or Create Address
+      const [savedAddress] = await Address.findOrCreate({
+        where: { ...address },
+        transaction: t,
+      });
+
+      // 3. Hash Password
+      const hashedPassword = await bcrypt.hash(password, 10);
+      
+      // 4. Create User (always active when created by an admin)
+      const newUser = await User.create({
+        name, email, password: hashedPassword, contact,
+        address_id: savedAddress.id, is_active: true, role_id,
+        details, designation
+      }, { transaction: t });
+
+      const token = generateToken(newUser.id);
+      const { password: _, ...userResponse } = newUser.get({ plain: true });
+
+      return {
+        status: 201,
+        body: { message: "User created by admin successfully.", token, user: userResponse },
+      };
     });
 
-    res.status(201).json({
-      message: "User created by admin successfully",
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        contact: user.contact,
-        has_admin_access: user.has_admin_access,
-      },
-      Token,
-    });
+    res.status(result.status).json(result.body);
   } catch (err) {
-    console.error("Admin register error:", err);
-    res.status(500).json({ message: "Server error during admin registration" });
+    console.error("Admin Registration Error:", err);
+    res.status(err.status || 500).json({ message: err.message || "Server error during admin registration." });
   }
 };
 
-// Controller to log in an existing user
 
+// -------------------- Login Controller --------------------
 export const loginController = async (req, res) => {
   const { identifier, password } = req.body;
-
   if (!identifier || !password) {
-    return res
-      .status(400)
-      .json({ message: "Email/contact and password are required." });
+    return res.status(400).json({ message: "Email/contact and password are required." });
   }
 
   try {
-    // Find user by email or contact
-    const user = await User.findUserByContactOrEmail(identifier);
+    const user = await User.findOne({
+      where: { [Op.or]: [{ email: identifier }, { contact: identifier }] },
+      include: [
+        { model: Role, as: "role" },
+        { model: Address, as: "address" },
+      ],
+    });
 
     if (!user) {
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
-    // Check password
-    if (!(await bcrypt.compare(password, user.password))) {
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
     if (!user.is_active) {
-      return res.status(403).json({
-        message:
-          "Your account is pending approval. Please wait for an administrator to activate it.",
-      });
+      return res.status(403).json({ message: "Your account is pending approval or has been deactivated." });
     }
 
-    // Get role info
-    const roleDoc = await getRoleById(user.role_id);
-    if (!roleDoc) {
-      return res
-        .status(404)
-        .json({ message: `Role with ID '${user.role_id}' not found.` });
-    }
-
-    // Generate tokens
-    const Token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "35m",
-    });
-
-    // Fetch and send full user details
-    const userDetails = await User.findUserWithDetailsById(user.id);
-
-    res.status(200).json({
-      message: "Logged in successfully",
-      Token,
-      user: {
-        ...userDetails,
-        role: roleDoc.name, // attach role info here
-      },
-    });
+    const token = generateToken(user.id);
+    const { password: _, ...userResponse } = user.get({ plain: true });
+    
+    res.status(200).json({ message: "Logged in successfully.", token, user: userResponse });
   } catch (err) {
-    console.error("Login error:", err);
+    console.error("Login Error:", err);
     res.status(500).json({ message: "Server error during login." });
   }
 };
 
-// Controller to log out a user
+// -------------------- Logout Controller --------------------
 export const logoutController = async (req, res) => {
-  res.status(200).json({ message: "Logged out successfully" });
+  res.status(200).json({ message: "Logged out successfully." });
 };

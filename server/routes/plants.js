@@ -1,16 +1,36 @@
 import express from "express";
 import { authMiddleware } from "../middlewares/authMiddleware.js";
 import { checkPermission } from "../middlewares/permissionMiddleware.js";
-
-import {createPlantController,linkPlantToUserController,getAllPlantsController,getPlantByIdController,updatePlantController,deletePlantController,} from "../controllers/plant.js";
+import {
+  createPlantController,
+  linkPlantToUserController,
+  getAllPlantsController,
+  getPlantByIdController,
+  updatePlantController,
+  deletePlantController,
+} from "../controllers/plant.js"; // Standardized file naming
 
 const router = express.Router();
 
-router.post("/plant" , createPlantController); // Create a new plant
-router.get("/getallplants", getAllPlantsController); // Get all plants with details
-router.get("/plant/:id", getPlantByIdController); // Get plant details by ID
-router.put("/plant/:id", updatePlantController); // Update plant details by ID
-router.delete("/plant/:id", deletePlantController); // Delete plant by ID
-router.put("/user/link-plant", authMiddleware,  checkPermission(" Link Plant "), linkPlantToUserController); // Link a plant to a user (requires auth)
+// --- Define routes individually ---
+
+// POST /api/plants - Create a new plant
+router.post("/",  createPlantController);
+
+// GET /api/plants - Get all plants
+router.get("/", getAllPlantsController);
+
+// GET /api/plants/:id - Get a single plant by its ID
+router.get("/:id", getPlantByIdController);
+
+// PUT /api/plants/:id - Update a plant by its ID
+router.put("/update/:id", authMiddleware,  updatePlantController);
+
+// DELETE /api/plants/:id - Delete a plant by its ID
+router.delete("/:id", authMiddleware,  deletePlantController);
+
+
+router.put("/link-user", authMiddleware, linkPlantToUserController);
+
 
 export default router;

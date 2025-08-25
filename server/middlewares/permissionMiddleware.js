@@ -1,5 +1,5 @@
 // middlewares/permissionMiddleware.js
-import sql from "../db.js";
+import pool from "../db.js";
 
 export const checkPermission = (permissionName) => {
   return async (req, res, next) => {
@@ -12,7 +12,7 @@ export const checkPermission = (permissionName) => {
       }
 
       // 1. Get user's role
-      const [user] = await sql/*sql*/`
+      const [user] = await pool/*pool*/`
         SELECT role_id 
         FROM users 
         WHERE id = ${userId}
@@ -23,7 +23,7 @@ export const checkPermission = (permissionName) => {
       }
 
       // 2. Check if role has the required permission
-      const result = await sql/*sql*/`
+      const result = await pool/*pool*/`
         SELECT 1 
         FROM role_has_permissions rhp
         JOIN permissions p ON rhp.permission_id = p.id

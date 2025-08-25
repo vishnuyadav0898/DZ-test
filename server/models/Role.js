@@ -1,28 +1,12 @@
-import sql from "../db.js";
+import { DataTypes } from "sequelize";
+import sequelize from "../sequelize.js";
 
-// Function to create a new role
-export async function createRole(roleName) {
-  const result = await sql`
-    INSERT INTO roles (name)
-    VALUES (${roleName})
-    RETURNING *
-  `;
-  return result[0];
-}
+const Role = sequelize.define("Role", {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  name: { type: DataTypes.STRING, allowNull: false, unique: true },
+}, {
+  tableName: "roles",
+  timestamps: false,
+});
 
-// Function to get all roles
-export async function getRoles() {
-  const roles = await sql`
-    SELECT * FROM roles
-  `;
-  return roles;
-}
-// common func to get role to use in users, and others routes
-export async function getRoleById(id) {
-  const result = await sql`
-    SELECT * FROM roles WHERE id = ${id}
-  `;
-  return result[0];
-}
-
-
+export default Role;

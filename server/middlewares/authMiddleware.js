@@ -19,7 +19,7 @@ export const authMiddleware = (req, res, next) => {
     res.status(401).json({ message: 'Invalid token' });
   }
 };
-export const is_admin = (req,res,next)=>{
+export const isAdmin = (req,res,next)=>{
   if (req.user.has_admin_access) {
       return res.status(403).json({ message: "Only admins can create users" });
     }
